@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AITU Smart Gym</title>
+<style>
+:root{--ink:#14202b;--mut:#5b6670;--bg:#f4f6f3;--card:#fff;--line:#d9ddd8;--ac:#0b7a5c;--ac2:#e8f4ef;--bad:#b3261e;--warn:#9a6700}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.45}
+header{background:var(--ink);color:#fff;padding:14px 20px;display:flex;flex-wrap:wrap;align-items:center;gap:12px;justify-content:space-between}
+header h1{font-size:20px;margin:0}nav{display:flex;flex-wrap:wrap;gap:8px}
+nav button{background:transparent;color:#fff;border:1px solid #ffffff55;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:15px}
+nav button.on{background:var(--ac);border-color:var(--ac)}.who{font-size:14px;color:#cfd8d3}
+main{max-width:980px;margin:0 auto;padding:20px}h2{margin:0 0 12px;font-size:24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+label{display:block;font-size:14px;color:var(--mut);margin-bottom:4px}
+input,select{width:100%;padding:10px;border:1px solid #b9c0ba;border-radius:8px;font-size:16px;background:#fff}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px}
+button.btn{background:var(--ac);color:#fff;border:0;border-radius:8px;padding:11px 18px;font-size:16px;cursor:pointer}
+button.btn:hover{filter:brightness(1.08)}button.btn.sec{background:#fff;color:var(--ink);border:1px solid #b9c0ba}
+button.btn.bad{background:var(--bad)}button.btn.sm{padding:7px 12px;font-size:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.eq{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff;display:flex;flex-direction:column;gap:6px}
+.eq b{font-size:17px}.tag{display:inline-block;background:var(--ac2);color:var(--ac);border-radius:20px;padding:2px 10px;font-size:13px}
+.msg{padding:12px 14px;border-radius:10px;margin-bottom:14px;font-size:16px}.ok{background:#e3f4ea;color:#0a5c3d;border:1px solid #b7e0c8}
+.err{background:#fdeceb;color:var(--bad);border:1px solid #f3c2bf}.info{background:#eef3f8;color:#24425e;border:1px solid #cddbe8}
+table{width:100%;border-collapse:collapse;font-size:15px}th{text-align:left;background:var(--ac);color:#fff;padding:9px}td{padding:9px;border-bottom:1px solid var(--line);vertical-align:middle}
+.bar{height:12px;background:var(--ac);border-radius:6px;min-width:2px}.s-confirmed{color:#0a5c3d}.s-cancelled{color:var(--bad)}.s-no-show{color:var(--warn)}.s-completed{color:var(--mut)}
+#dblog{max-width:980px;margin:0 auto 40px;padding:0 20px}#dblog details{background:#14202b;color:#e9f1ec;border-radius:12px;padding:12px 16px}
+#dblog summary{cursor:pointer;font-weight:600}#dblog .ent{border-top:1px solid #ffffff22;margin-top:10px;padding-top:8px;font-family:Consolas,monospace;font-size:13px;white-space:pre-wrap}
+#dblog .a{color:#7fe0b8;font-family:system-ui,sans-serif;font-size:14px}.muted{color:var(--mut)}small{color:var(--mut)}
+</style>
+</head>
+<body>
+<header>
+  <h1>AITU Smart Gym</h1>
+  <nav id="nav"></nav>
+  <div class="who" id="who"></div>
+</header>
+<main id="app"></main>
+<div id="dblog"><details open><summary>Database activity (what the interface sent to Supabase)</summary><div id="logbody"><small>No actions yet.</small></div></details></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+// ====== SETUP: paste your Supabase anon (public) key here ======
+const SUPABASE_URL = 'https://ycsfaoybznkhgzpclacc.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_FFW-31ZSq4zTYT2aYckmWw_pcmVfe3e';
+// ===============================================================
+
+const app = document.getElementById('app');
+let sb = null, user = null, pending = null;
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pad = n => String(n).padStart(2,'0');
+const tomorrow = () => { const d = new Date(); d.setDate(d.getDate()+1); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); };
+const addMin = (t, m) => { const [h,mi] = t.split(':').map(Number); const x = h*60+mi+m; return pad(Math.floor(x/60))+':'+pad(x%60); };
+function errText(e){
+  const m = String(e && e.message || e);
+  if (/permission denied/i.test(m)) return 'Database error: ' + m + ' | Fix: run gym_08_fix_permissions.sql once in the Supabase SQL Editor (it gives the anon role access to the tables).';
+  if (/Invalid API key|JWT|apikey/i.test(m)) return 'Database error: ' + m + ' | Check SUPABASE_URL and SUPABASE_KEY at the top of index.html.';
+  if (/could not find the function|schema cache/i.test(m)) return 'Database error: ' + m + ' | Run gym_07_app_setup.sql once in the Supabase SQL Editor.';
+  return 'Database error: ' + m;
+}
+const nowStamp = () => { const d = new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds()); };
+
+function log(action, sql, result){
+  const box = document.getElementById('logbody');
+  if (box.querySelector('small')) box.innerHTML = '';
+  const d = document.createElement('div'); d.className = 'ent';
+  d.innerHTML = '<span class="a">' + esc(action) + '</span>\n' + esc(sql) + '\n-> ' + esc(result);
+  box.prepend(d);
+}
+function banner(kind, text){ return '<div class="msg ' + kind + '">' + esc(text) + '</div>'; }
+function setNav(active){
+  const items = [];
+  if (user && user.role === 'student') items.push(['find','Find equipment'],['mine','My bookings'],['stats','Statistics']);
+  if (user && user.role === 'staff') items.push(['abook','Bookings'],['admin','Equipment'],['astud','Students'],['stats','Statistics']);
+  document.getElementById('nav').innerHTML = items.map(i => '<button class="' + (i[0]===active?'on':'') + '" data-go="' + i[0] + '">' + i[1] + '</button>').join('') + (user ? '<button data-go="out">Log out</button>' : '');
+  document.getElementById('who').textContent = user ? ((user.role==='staff'?'Staff: ':'Student: ') + user.name) : '';
+  document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
+}
+function go(s){
+  if (s==='out'){ user = null; pending = null; return showLogin(); }
+  ({find:showFind, mine:showMine, stats:showStats, admin:showAdmin, abook:showAdminBookings, astud:showStudents})[s]();
+}
+async function run(promise){ const r = await promise; if (r.error) throw new Error(r.error.message); return r.data; }
+
+// ---------- Screen 1: Login ----------
+function showLogin(msg){
+  setNav('');
+  app.innerHTML = '<div class="card"><h2>Welcome</h2><p class="muted">Sign in with your university e-mail to find and book gym equipment.</p>' + (msg||'') +
+    '<div class="row"><div><label for="em">University e-mail</label><input id="em" type="email" placeholder="a.sarsen@astanait.edu.kz"></div></div>' +
+    '<button class="btn" id="lg">Log in</button> <small>Students and staff use the same form.</small></div>';
+  document.getElementById('lg').onclick = doLogin;
+  document.getElementById('em').onkeydown = e => { if (e.key==='Enter') doLogin(); };
+}
+async function doLogin(){
+  const email = document.getElementById('em').value.trim().toLowerCase();
+  if (!email) return showLogin(banner('err','Please enter your e-mail.'));
+  try{
+    let rows = await run(sb.from('student').select('student_id,name,surname,account_status').eq('email', email).limit(1));
+    log('Button: Log in', "SELECT student_id, name, surname, account_status FROM student WHERE email = '" + email + "';", rows.length + ' row(s)');
+    if (rows.length){
+      const s = rows[0];
+      user = {role:'student', id:s.student_id, name:s.name+' '+s.surname};
+      return showFind(banner('ok','Welcome, ' + s.name + '!'));
+    }
+    rows = await run(sb.from('staff').select('staff_id,full_name,role').eq('email', email).limit(1));
+    log('Button: Log in (staff)', "SELECT staff_id, full_name, role FROM staff WHERE email = '" + email + "';", rows.length + ' row(s)');
+    if (rows.length){ user = {role:'staff', id:rows[0].staff_id, name:rows[0].full_name}; return showAdminBookings(banner('ok','Welcome, ' + rows[0].full_name + '!')); }
+    showLogin(banner('err','No account with this e-mail was found.'));
+  }catch(e){ showLogin(banner('err',errText(e))); }
+}
+
+// ---------- Screen 2: Find equipment ----------
+async function showFind(msg){
+  setNav('find');
+  let zones = [];
+  try{ zones = await run(sb.from('gym_zone').select('zone_id,zone_name').order('zone_id')); }catch(e){ msg = (msg||'') + banner('err',errText(e)); }
+  const times = []; for (let m=8*60; m<=21*60+30; m+=30) times.push(pad(Math.floor(m/60))+':'+pad(m%60));
+  app.innerHTML = '<div class="card"><h2>Find equipment</h2>' + (msg||'') +
+   '<div class="row">' +
+   '<div><label for="zn">Gym zone</label><select id="zn"><option value="">All zones</option>' + zones.map(z => '<option value="'+z.zone_id+'">'+esc(z.zone_name)+'</option>').join('') + '</select></div>' +
+   '<div><label for="ty">Equipment type</label><select id="ty"><option value="">All types</option><option value="cardio">Cardio</option><option value="strength">Strength</option><option value="free_weights">Free weights</option><option value="functional">Functional</option></select></div>' +
+   '<div><label for="dt">Date</label><input id="dt" type="date" value="' + tomorrow() + '"></div>' +
+   '<div><label for="st">Start time</label><select id="st">' + times.map(t => '<option>'+t+'</option>').join('') + '</select></div>' +
+   '<div><label for="du">Session length</label><select id="du"><option value="15">15 min</option><option value="20" selected>20 min</option><option value="30">30 min</option></select></div>' +
+   '</div><button class="btn" id="fd">Find equipment</button></div><div id="res"></div>';
+  document.getElementById('fd').onclick = findEquipment;
+}
+async function findEquipment(){
+  const zone = document.getElementById('zn').value, type = document.getElementById('ty').value;
+  const date = document.getElementById('dt').value, start = document.getElementById('st').value, dur = Number(document.getElementById('du').value);
+  const end = addMin(start, dur), res = document.getElementById('res');
+  if (!date) return res.innerHTML = banner('err','Please choose a date.');
+  res.innerHTML = banner('info','Searching...');
+  try{
+    const busy = await run(sb.from('booking').select('equipment_id').eq('booking_date', date).eq('status','confirmed').lt('start_time', end).gt('end_time', start));
+    const ids = [...new Set(busy.map(b => b.equipment_id))];
+    let q = sb.from('equipment').select('equipment_id,name,equipment_type,max_session_min,gym_zone(zone_name)').eq('status','available');
+    if (zone) q = q.eq('zone_id', Number(zone));
+    if (type) q = q.eq('equipment_type', type);
+    if (ids.length) q = q.not('equipment_id','in','(' + ids.join(',') + ')');
+    let rows = await run(q.order('equipment_id'));
+    rows = rows.filter(r => Number(r.max_session_min) >= dur);
+    log('Button: Find equipment',
+      "SELECT e.equipment_id, e.name, e.equipment_type, e.max_session_min, z.zone_name\nFROM equipment e JOIN gym_zone z ON z.zone_id = e.zone_id\nWHERE e.status = 'available'" + (zone?"\n  AND e.zone_id = "+zone:'') + (type?"\n  AND e.equipment_type = '"+type+"'":'') +
+      (ids.length?"\n  AND e.equipment_id NOT IN ("+ids.join(',')+")  -- already booked "+start+"-"+end:'') + ';',
+      rows.length + ' machine(s) returned');
+    if (!rows.length){
+      const total = await sb.from('equipment').select('equipment_id',{count:'exact',head:true});
+      if (total.error) return res.innerHTML = banner('err', errText(total.error));
+      if (!total.count) return res.innerHTML = banner('err','The equipment table returned 0 rows. The database may be empty or blocked by Row Level Security: run gym_08_fix_permissions.sql in the Supabase SQL Editor and try again.');
+      return res.innerHTML = banner('info','No equipment matches these filters. Possible reasons: all matching machines are booked at this time, they are under maintenance, or their maximum session is shorter than ' + dur + ' min (strength machines allow 20 min). Try another time, zone or a shorter session.');
+    }
+    res.innerHTML = '<h2>Search results (' + rows.length + ')</h2><div class="grid">' + rows.map(r =>
+      '<div class="eq"><b>' + esc(r.name) + '</b><span class="tag">' + esc(r.gym_zone ? r.gym_zone.zone_name : '') + '</span><small>' + esc(r.equipment_type) + ' | max ' + esc(r.max_session_min) + ' min</small>' +
+      '<small>' + esc(date) + ', ' + start + '-' + end + '</small><button class="btn sm" data-b="' + r.equipment_id + '">Book</button></div>').join('') + '</div>';
+    res.querySelectorAll('[data-b]').forEach(b => b.onclick = () => {
+      const r = rows.find(x => x.equipment_id === Number(b.dataset.b));
+      pending = {equipment_id:r.equipment_id, name:r.name, zone:r.gym_zone?r.gym_zone.zone_name:'', date, start, end};
+      showConfirm();
+    });
+  }catch(e){ res.innerHTML = banner('err',errText(e)); }
+}
+
+// ---------- Screen 3: Confirm booking ----------
+function showConfirm(){
+  setNav('find');
+  const p = pending;
+  app.innerHTML = '<div class="card"><h2>Confirm booking</h2><table><tr><th>Equipment</th><td>' + esc(p.name) + '</td></tr><tr><th>Zone</th><td>' + esc(p.zone) + '</td></tr><tr><th>Date</th><td>' + esc(p.date) + '</td></tr><tr><th>Time</th><td>' + p.start + ' - ' + p.end + '</td></tr></table><br>' +
+   '<button class="btn" id="cf">Confirm Booking</button> <button class="btn sec" id="bk">Back to search</button></div>';
+  document.getElementById('bk').onclick = () => showFind();
+  document.getElementById('cf').onclick = confirmBooking;
+}
+async function confirmBooking(){
+  const p = pending, btn = document.getElementById('cf'); btn.disabled = true;
+  try{
+    // re-check that the slot is still free
+    const clash = await run(sb.from('booking').select('booking_id').eq('equipment_id', p.equipment_id).eq('booking_date', p.date).eq('status','confirmed').lt('start_time', p.end).gt('end_time', p.start));
+    if (clash.length){ btn.disabled = false; return showFind(banner('err','Sorry, this slot was just booked by someone else.')); }
+    const last = await run(sb.from('booking').select('booking_id').order('booking_id',{ascending:false}).limit(1));
+    const id = (last.length ? Number(last[0].booking_id) : 0) + 1;
+    const row = {booking_id:id, student_id:user.id, equipment_id:p.equipment_id, booking_date:p.date, start_time:p.start, end_time:p.end, status:'confirmed', created_at:nowStamp()};
+    await run(sb.from('booking').insert(row));
+    log('Button: Confirm Booking',
+      "INSERT INTO booking (booking_id, student_id, equipment_id, booking_date, start_time, end_time, status, created_at)\nVALUES (" + id + ", " + user.id + ", " + p.equipment_id + ", '" + p.date + "', '" + p.start + "', '" + p.end + "', 'confirmed', '" + row.created_at + "');",
+      '1 row inserted (booking_id = ' + id + ')');
+    pending = null;
+    showMine(banner('ok','Booking Confirmed! Your booking number is ' + id + '.'));
+  }catch(e){ btn.disabled = false; app.insertAdjacentHTML('afterbegin', banner('err',errText(e))); }
+}
+
+// ---------- Screen 4: My bookings ----------
+async function showMine(msg){
+  setNav('mine');
+  app.innerHTML = '<div class="card"><h2>My bookings</h2>' + (msg||'') + '<div id="ml">Loading...</div></div>';
+  try{
+    const rows = await run(sb.from('booking').select('booking_id,booking_date,start_time,end_time,status,equipment(name)').eq('student_id', user.id).order('booking_date').order('start_time'));
+    log('Screen: My bookings', "SELECT b.booking_id, e.name, b.booking_date, b.start_time, b.end_time, b.status\nFROM booking b JOIN equipment e ON e.equipment_id = b.equipment_id\nWHERE b.student_id = " + user.id + "\nORDER BY b.booking_date, b.start_time;", rows.length + ' row(s)');
+    const ml = document.getElementById('ml');
+    if (!rows.length) return ml.innerHTML = '<p class="muted">You have no bookings yet. Use "Find equipment" to make one.</p>';
+    ml.innerHTML = '<table><tr><th>#</th><th>Equipment</th><th>Date</th><th>Time</th><th>Status</th><th>Action</th></tr>' + rows.map(r =>
+      '<tr><td>' + r.booking_id + '</td><td>' + esc(r.equipment ? r.equipment.name : '') + '</td><td>' + esc(r.booking_date) + '</td><td>' + esc(r.start_time) + '-' + esc(r.end_time) + '</td><td class="s-' + esc(r.status) + '">' + esc(r.status) + '</td><td>' +
+      (r.status==='confirmed' ? '<button class="btn sm bad" data-c="' + r.booking_id + '">Cancel</button>' : '') +
+      (r.status==='cancelled' ? '<button class="btn sm sec" data-d="' + r.booking_id + '">Remove</button>' : '') + '</td></tr>').join('') + '</table>';
+    ml.querySelectorAll('[data-c]').forEach(b => b.onclick = () => cancelBooking(Number(b.dataset.c)));
+    ml.querySelectorAll('[data-d]').forEach(b => b.onclick = () => removeBooking(Number(b.dataset.d)));
+  }catch(e){ document.getElementById('ml').innerHTML = banner('err',errText(e)); }
+}
+async function cancelBooking(id){
+  if (!confirm('Cancel booking #' + id + '?')) return;
+  try{
+    const rows = await run(sb.from('booking').update({status:'cancelled'}).eq('booking_id', id).eq('student_id', user.id).eq('status','confirmed').select());
+    log('Button: Cancel', "UPDATE booking SET status = 'cancelled'\nWHERE booking_id = " + id + " AND student_id = " + user.id + " AND status = 'confirmed';", rows.length + ' row(s) updated');
+    showMine(banner('ok','Booking #' + id + ' was cancelled.'));
+  }catch(e){ showMine(banner('err',errText(e))); }
+}
+async function removeBooking(id){
+  if (!confirm('Remove cancelled booking #' + id + ' permanently?')) return;
+  try{
+    const rows = await run(sb.from('booking').delete().eq('booking_id', id).eq('student_id', user.id).eq('status','cancelled').select());
+    log('Button: Remove', "DELETE FROM booking\nWHERE booking_id = " + id + " AND student_id = " + user.id + " AND status = 'cancelled';", rows.length + ' row(s) deleted');
+    showMine(banner('ok','Booking #' + id + ' was removed.'));
+  }catch(e){ showMine(banner('err',errText(e))); }
+}
+
+// ---------- Screen 5: Statistics (aggregation) ----------
+async function showStats(){
+  setNav('stats');
+  app.innerHTML = '<div class="card"><h2>Gym statistics</h2><div id="st1">Loading...</div></div>';
+  try{
+    const [zones, status, usage] = await Promise.all([run(sb.rpc('bookings_per_zone')), run(sb.rpc('bookings_by_status')), run(sb.rpc('sensor_usage'))]);
+    log('Screen: Statistics (zones)', "SELECT z.zone_name, COUNT(*) AS total_bookings\nFROM booking b JOIN equipment e ON e.equipment_id = b.equipment_id\nJOIN gym_zone z ON z.zone_id = e.zone_id\nWHERE b.status <> 'cancelled'\nGROUP BY z.zone_name ORDER BY total_bookings DESC;", zones.length + ' group(s)');
+    log('Screen: Statistics (status)', "SELECT status, COUNT(*) AS total FROM booking GROUP BY status ORDER BY total DESC;", status.length + ' group(s)');
+    log('Screen: Statistics (sensors)', "SELECT e.name, COUNT(*) AS readings, ROUND(100.0 * SUM(CASE WHEN sr.occupancy_status = 'in_use' THEN 1 ELSE 0 END) / COUNT(*), 0) AS in_use_percent\nFROM sensor_reading sr JOIN equipment_sensor es ON es.sensor_id = sr.sensor_id JOIN equipment e ON e.equipment_id = es.equipment_id\nGROUP BY e.name;", usage.length + ' machine(s)');
+    const mx = Math.max(1, ...zones.map(z => Number(z.total_bookings)));
+    document.getElementById('st1').innerHTML =
+      '<h3>Bookings per zone (without cancelled)</h3><table><tr><th>Zone</th><th>Bookings</th><th></th></tr>' + zones.map(z => '<tr><td>' + esc(z.zone_name) + '</td><td>' + z.total_bookings + '</td><td style="width:40%"><div class="bar" style="width:' + (100*Number(z.total_bookings)/mx) + '%"></div></td></tr>').join('') + '</table>' +
+      '<h3>Bookings by status</h3><table><tr><th>Status</th><th>Total</th></tr>' + status.map(s => '<tr><td class="s-' + esc(s.status_name) + '">' + esc(s.status_name) + '</td><td>' + s.total + '</td></tr>').join('') + '</table>' +
+      '<h3>Smart feature: machine use according to sensors</h3><table><tr><th>Machine</th><th>Readings</th><th>In use, %</th></tr>' + usage.map(u => '<tr><td>' + esc(u.equipment_name) + '</td><td>' + u.readings + '</td><td>' + u.in_use_percent + '</td></tr>').join('') + '</table>' +
+      '<p><small>Sensor data in this demo is synthetic.</small></p>';
+  }catch(e){ document.getElementById('st1').innerHTML = banner('err',errText(e) + ' (did you run gym_07_app_setup.sql?)'); }
+}
+
+// ---------- Staff screens (full management: bookings, equipment, students) ----------
+async function nextId(table, col){
+  const last = await run(sb.from(table).select(col).order(col,{ascending:false}).limit(1));
+  return (last.length ? Number(last[0][col]) : 0) + 1;
+}
+const timeOptions = () => { const t = []; for (let m=8*60; m<=21*60+30; m+=30) t.push(pad(Math.floor(m/60))+':'+pad(m%60)); return t.map(x => '<option>'+x+'</option>').join(''); };
+const optList = (arr, v) => arr.map(o => '<option' + (o===v?' selected':'') + '>' + o + '</option>').join('');
+
+// --- Staff: all bookings (SELECT, INSERT, UPDATE, DELETE) ---
+async function showAdminBookings(msg){
+  setNav('abook');
+  app.innerHTML = '<div class="card">Loading...</div>';
+  try{
+    const [students, equip, rows] = await Promise.all([
+      run(sb.from('student').select('student_id,name,surname').order('student_id')),
+      run(sb.from('equipment').select('equipment_id,name').order('equipment_id')),
+      run(sb.from('booking').select('booking_id,booking_date,start_time,end_time,status,student(name,surname),equipment(name)').order('booking_id',{ascending:false}))]);
+    log('Screen: All bookings (staff)', "SELECT b.booking_id, s.name, s.surname, e.name, b.booking_date, b.start_time, b.end_time, b.status\nFROM booking b JOIN student s ON s.student_id = b.student_id JOIN equipment e ON e.equipment_id = b.equipment_id\nORDER BY b.booking_id DESC;", rows.length + ' row(s)');
+    app.innerHTML =
+      '<div class="card"><h2>New booking for a student</h2>' + (msg||'') + '<div class="row">' +
+      '<div><label for="ns">Student</label><select id="ns">' + students.map(x => '<option value="'+x.student_id+'">'+esc(x.student_id+' - '+x.name+' '+x.surname)+'</option>').join('') + '</select></div>' +
+      '<div><label for="ne">Equipment</label><select id="ne">' + equip.map(x => '<option value="'+x.equipment_id+'">'+esc(x.equipment_id+' - '+x.name)+'</option>').join('') + '</select></div>' +
+      '<div><label for="nd">Date</label><input id="nd" type="date" value="' + tomorrow() + '"></div>' +
+      '<div><label for="nt">Start time</label><select id="nt">' + timeOptions() + '</select></div>' +
+      '<div><label for="nl">Length</label><select id="nl"><option value="15">15 min</option><option value="20" selected>20 min</option><option value="30">30 min</option></select></div>' +
+      '</div><button class="btn" id="nb">Add booking</button></div>' +
+      '<div class="card"><h2>All bookings (' + rows.length + ')</h2><table><tr><th>#</th><th>Student</th><th>Equipment</th><th>Date</th><th>Time</th><th>Status</th><th>Actions</th></tr>' + rows.map(r =>
+        '<tr><td>' + r.booking_id + '</td><td>' + esc(r.student ? r.student.name + ' ' + r.student.surname : '') + '</td><td>' + esc(r.equipment ? r.equipment.name : '') + '</td><td>' + esc(r.booking_date) + '</td><td>' + esc(r.start_time) + '-' + esc(r.end_time) + '</td>' +
+        '<td><select id="bs' + r.booking_id + '">' + optList(['confirmed','cancelled','completed','no-show'], r.status) + '</select></td>' +
+        '<td><button class="btn sm" data-bs="' + r.booking_id + '">Save</button> <button class="btn sm bad" data-bd="' + r.booking_id + '">Delete</button></td></tr>').join('') + '</table></div>';
+    document.getElementById('nb').onclick = addBookingStaff;
+    document.querySelectorAll('[data-bs]').forEach(b => b.onclick = () => setBookingStatus(Number(b.dataset.bs)));
+    document.querySelectorAll('[data-bd]').forEach(b => b.onclick = () => deleteBooking(Number(b.dataset.bd)));
+  }catch(e){ app.innerHTML = '<div class="card">' + banner('err', errText(e)) + '</div>'; }
+}
+async function addBookingStaff(){
+  const sid = Number(document.getElementById('ns').value), eid = Number(document.getElementById('ne').value);
+  const date = document.getElementById('nd').value, start = document.getElementById('nt').value, end = addMin(start, Number(document.getElementById('nl').value));
+  if (!date) return showAdminBookings(banner('err','Please choose a date.'));
+  try{
+    const clash = await run(sb.from('booking').select('booking_id').eq('equipment_id', eid).eq('booking_date', date).eq('status','confirmed').lt('start_time', end).gt('end_time', start));
+    if (clash.length) return showAdminBookings(banner('err','This machine is already booked at that time.'));
+    const id = await nextId('booking','booking_id'), created = nowStamp();
+    await run(sb.from('booking').insert({booking_id:id, student_id:sid, equipment_id:eid, booking_date:date, start_time:start, end_time:end, status:'confirmed', created_at:created}));
+    log('Button: Add booking (staff)', "INSERT INTO booking (booking_id, student_id, equipment_id, booking_date, start_time, end_time, status, created_at)\nVALUES (" + id + ", " + sid + ", " + eid + ", '" + date + "', '" + start + "', '" + end + "', 'confirmed', '" + created + "');", '1 row inserted');
+    showAdminBookings(banner('ok','Booking #' + id + ' was added.'));
+  }catch(e){ showAdminBookings(banner('err', errText(e))); }
+}
+async function setBookingStatus(id){
+  const v = document.getElementById('bs'+id).value;
+  try{
+    const rows = await run(sb.from('booking').update({status:v}).eq('booking_id', id).select());
+    log('Button: Save booking status (staff)', "UPDATE booking SET status = '" + v + "' WHERE booking_id = " + id + ";", rows.length + ' row(s) updated');
+    showAdminBookings(banner('ok','Booking #' + id + ' is now "' + v + '".'));
+  }catch(e){ showAdminBookings(banner('err', errText(e))); }
+}
+async function deleteBooking(id){
+  if (!confirm('Delete booking #' + id + ' permanently?')) return;
+  try{
+    const rows = await run(sb.from('booking').delete().eq('booking_id', id).select());
+    log('Button: Delete booking (staff)', "DELETE FROM booking WHERE booking_id = " + id + ";", rows.length + ' row(s) deleted');
+    showAdminBookings(banner('ok','Booking #' + id + ' was deleted.'));
+  }catch(e){ showAdminBookings(banner('err', errText(e))); }
+}
+
+// --- Staff: equipment (SELECT, INSERT, UPDATE, DELETE) ---
+async function showAdmin(msg){
+  setNav('admin');
+  app.innerHTML = '<div class="card">Loading...</div>';
+  try{
+    const [zones, rows] = await Promise.all([
+      run(sb.from('gym_zone').select('zone_id,zone_name').order('zone_id')),
+      run(sb.from('equipment').select('equipment_id,name,status,updated_by,gym_zone(zone_name)').order('equipment_id'))]);
+    log('Screen: Manage equipment', "SELECT e.equipment_id, e.name, e.status, e.updated_by, z.zone_name\nFROM equipment e JOIN gym_zone z ON z.zone_id = e.zone_id ORDER BY e.equipment_id;", rows.length + ' row(s)');
+    app.innerHTML =
+      '<div class="card"><h2>Add equipment</h2>' + (msg||'') + '<div class="row">' +
+      '<div><label for="an">Name</label><input id="an" placeholder="Treadmill #4"></div>' +
+      '<div><label for="az">Zone</label><select id="az">' + zones.map(z => '<option value="'+z.zone_id+'">'+esc(z.zone_name)+'</option>').join('') + '</select></div>' +
+      '<div><label for="at">Type</label><select id="at"><option>cardio</option><option>strength</option><option>free_weights</option><option>functional</option></select></div>' +
+      '<div><label for="am">Max session (min)</label><select id="am"><option>15</option><option selected>20</option><option>30</option></select></div>' +
+      '</div><button class="btn" id="ae">Add equipment</button></div>' +
+      '<div class="card"><h2>Equipment (' + rows.length + ')</h2><table><tr><th>#</th><th>Machine</th><th>Zone</th><th>Status</th><th>Last edited by (staff id)</th><th>Actions</th></tr>' + rows.map(r =>
+        '<tr><td>' + r.equipment_id + '</td><td>' + esc(r.name) + '</td><td>' + esc(r.gym_zone ? r.gym_zone.zone_name : '') + '</td><td><select id="s' + r.equipment_id + '">' + optList(['available','maintenance','out_of_service'], r.status) + '</select></td><td>' + esc(r.updated_by) + '</td>' +
+        '<td><button class="btn sm" data-u="' + r.equipment_id + '">Save</button> <button class="btn sm bad" data-x="' + r.equipment_id + '">Delete</button></td></tr>').join('') + '</table></div>';
+    document.getElementById('ae').onclick = addEquipment;
+    document.querySelectorAll('[data-u]').forEach(b => b.onclick = () => setStatus(Number(b.dataset.u)));
+    document.querySelectorAll('[data-x]').forEach(b => b.onclick = () => deleteEquipment(Number(b.dataset.x)));
+  }catch(e){ app.innerHTML = '<div class="card">' + banner('err', errText(e)) + '</div>'; }
+}
+async function setStatus(id){
+  const v = document.getElementById('s'+id).value;
+  try{
+    const rows = await run(sb.from('equipment').update({status:v, updated_by:user.id}).eq('equipment_id', id).select());
+    log('Button: Save (staff)', "UPDATE equipment SET status = '" + v + "', updated_by = " + user.id + "\nWHERE equipment_id = " + id + ";", rows.length + ' row(s) updated');
+    showAdmin(banner('ok','Equipment #' + id + ' is now "' + v + '".'));
+  }catch(e){ showAdmin(banner('err', errText(e))); }
+}
+async function addEquipment(){
+  const name = document.getElementById('an').value.trim();
+  if (!name) return showAdmin(banner('err','Please enter the machine name.'));
+  const zone = Number(document.getElementById('az').value), type = document.getElementById('at').value, mx = document.getElementById('am').value;
+  try{
+    const id = await nextId('equipment','equipment_id');
+    await run(sb.from('equipment').insert({equipment_id:id, zone_id:zone, updated_by:user.id, name:name, equipment_type:type, status:'available', max_session_min:mx}));
+    log('Button: Add equipment (staff)', "INSERT INTO equipment (equipment_id, zone_id, updated_by, name, equipment_type, status, max_session_min)\nVALUES (" + id + ", " + zone + ", " + user.id + ", '" + name + "', '" + type + "', 'available', '" + mx + "');", '1 row inserted');
+    showAdmin(banner('ok','Equipment "' + name + '" was added (#' + id + ').'));
+  }catch(e){ showAdmin(banner('err', errText(e))); }
+}
+async function deleteEquipment(id){
+  if (!confirm('Delete equipment #' + id + ' permanently?')) return;
+  try{
+    const rows = await run(sb.from('equipment').delete().eq('equipment_id', id).select());
+    log('Button: Delete equipment (staff)', "DELETE FROM equipment WHERE equipment_id = " + id + ";", rows.length + ' row(s) deleted');
+    showAdmin(banner('ok','Equipment #' + id + ' was deleted.'));
+  }catch(e){ showAdmin(banner('err', /foreign key|violates/i.test(e.message) ? 'This machine is used by bookings or sensors, so it cannot be deleted. Set its status to out_of_service instead.' : errText(e))); }
+}
+
+// --- Staff: students (SELECT, INSERT, UPDATE, DELETE) ---
+async function showStudents(msg){
+  setNav('astud');
+  app.innerHTML = '<div class="card">Loading...</div>';
+  try{
+    const rows = await run(sb.from('student').select('student_id,name,surname,email,study_group,account_status').order('student_id'));
+    log('Screen: Students (staff)', "SELECT student_id, name, surname, email, study_group, account_status FROM student ORDER BY student_id;", rows.length + ' row(s)');
+    app.innerHTML =
+      '<div class="card"><h2>Add student</h2>' + (msg||'') + '<div class="row">' +
+      '<div><label for="sn">First name</label><input id="sn"></div><div><label for="ss">Surname</label><input id="ss"></div>' +
+      '<div><label for="se">University e-mail</label><input id="se" type="email" placeholder="a.name@astanait.edu.kz"></div><div><label for="sg">Group</label><input id="sg" placeholder="ST-2607"></div>' +
+      '</div><button class="btn" id="sa">Add student</button></div>' +
+      '<div class="card"><h2>Students (' + rows.length + ')</h2><table><tr><th>#</th><th>Name</th><th>E-mail</th><th>Group</th><th>Status</th><th>Actions</th></tr>' + rows.map(r =>
+        '<tr><td>' + r.student_id + '</td><td>' + esc(r.name + ' ' + r.surname) + '</td><td>' + esc(r.email) + '</td><td>' + esc(r.study_group) + '</td>' +
+        '<td><select id="st' + r.student_id + '">' + optList(['active','blocked'], r.account_status) + '</select></td>' +
+        '<td><button class="btn sm" data-ss="' + r.student_id + '">Save</button> <button class="btn sm bad" data-sd="' + r.student_id + '">Delete</button></td></tr>').join('') + '</table></div>';
+    document.getElementById('sa').onclick = addStudent;
+    document.querySelectorAll('[data-ss]').forEach(b => b.onclick = () => setStudentStatus(Number(b.dataset.ss)));
+    document.querySelectorAll('[data-sd]').forEach(b => b.onclick = () => deleteStudent(Number(b.dataset.sd)));
+  }catch(e){ app.innerHTML = '<div class="card">' + banner('err', errText(e)) + '</div>'; }
+}
+async function addStudent(){
+  const n = document.getElementById('sn').value.trim(), sn = document.getElementById('ss').value.trim(), em = document.getElementById('se').value.trim().toLowerCase(), g = document.getElementById('sg').value.trim();
+  if (!n || !sn || !em) return showStudents(banner('err','Please fill in first name, surname and e-mail.'));
+  try{
+    const dup = await run(sb.from('student').select('student_id').eq('email', em));
+    if (dup.length) return showStudents(banner('err','A student with this e-mail already exists.'));
+    const id = await nextId('student','student_id');
+    await run(sb.from('student').insert({student_id:id, name:n, surname:sn, email:em, study_group:g, account_status:'active'}));
+    log('Button: Add student (staff)', "INSERT INTO student (student_id, name, surname, email, study_group, account_status)\nVALUES (" + id + ", '" + n + "', '" + sn + "', '" + em + "', '" + g + "', 'active');", '1 row inserted');
+    showStudents(banner('ok','Student ' + n + ' ' + sn + ' was added (#' + id + ').'));
+  }catch(e){ showStudents(banner('err', errText(e))); }
+}
+async function setStudentStatus(id){
+  const v = document.getElementById('st'+id).value;
+  try{
+    const rows = await run(sb.from('student').update({account_status:v}).eq('student_id', id).select());
+    log('Button: Save student status (staff)', "UPDATE student SET account_status = '" + v + "' WHERE student_id = " + id + ";", rows.length + ' row(s) updated');
+    showStudents(banner('ok','Student #' + id + ' is now "' + v + '".'));
+  }catch(e){ showStudents(banner('err', errText(e))); }
+}
+async function deleteStudent(id){
+  if (!confirm('Delete student #' + id + ' permanently?')) return;
+  try{
+    const rows = await run(sb.from('student').delete().eq('student_id', id).select());
+    log('Button: Delete student (staff)', "DELETE FROM student WHERE student_id = " + id + ";", rows.length + ' row(s) deleted');
+    showStudents(banner('ok','Student #' + id + ' was deleted.'));
+  }catch(e){ showStudents(banner('err', /foreign key|violates/i.test(e.message) ? 'This student has bookings, so the student cannot be deleted. Delete the bookings first or set the status to blocked.' : errText(e))); }
+}
+
+// ---------- start ----------
+if (!window.supabase || SUPABASE_KEY.startsWith('PASTE')){
+  app.innerHTML = '<div class="card"><h2>Setup needed</h2><p>Open <b>index.html</b> in a text editor and paste your Supabase anon key into <code>SUPABASE_KEY</code> (Supabase: Project Settings, API Keys). Also run <code>gym_07_app_setup.sql</code> once in the SQL Editor.</p></div>';
+} else {
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  showLogin();
+}
+</script>
+</body>
+</html>
